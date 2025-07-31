@@ -433,6 +433,59 @@
         .pwa-mode .custom-keyboard {
             padding-bottom: max(8px, env(safe-area-inset-bottom));
         }
+        
+        /* Добавленные стили */
+        .frequency-chart {
+            display: flex;
+            align-items: flex-end;
+            height: 120px;
+            margin: 10px 0;
+            gap: 2px;
+            justify-content: center;
+        }
+        .frequency-bar {
+            width: 12px;
+            background: var(--primary-color);
+            border-radius: 3px 3px 0 0;
+            position: relative;
+        }
+        .frequency-bar.hot {
+            background: var(--secondary-color);
+        }
+        .frequency-bar.cold {
+            background: var(--primary-color);
+        }
+        .frequency-label {
+            position: absolute;
+            bottom: -20px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 10px;
+        }
+        .stats-advanced {
+            margin-top: 15px;
+            font-size: 13px;
+        }
+        .cluster-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 5px;
+            margin: 8px 0;
+        }
+        .cluster-title {
+            font-weight: bold;
+            width: 100%;
+            margin-top: 10px;
+            color: var(--special-color);
+        }
+        .cluster-badge {
+            background: var(--special-color);
+            color: white;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 12px;
+            margin-left: 5px;
+        }
     </style>
 </head>
 <body>
@@ -441,7 +494,7 @@
     <div class="container">
         <div class="card">
             <h1>Рапидо Старт</h1>
-            <p class="subtitle">Анализ с методами Огнева и Карнауха</p>
+            <p class="subtitle">Анализ с методами Огнева, Карнауха и кластеризацией</p>
         </div>
         
         <div class="card">
@@ -450,6 +503,7 @@
                 <div class="method-btn active" data-method="cold" tabindex="0">Холодные</div>
                 <div class="method-btn" data-method="ogneva" tabindex="0">Огнева<span class="info-icon" title="Характеристическое число">?</span></div>
                 <div class="method-btn" data-method="karnaugh" tabindex="0">Карнауха<span class="info-icon" title="Метод математика П.В. Карнауха">?</span></div>
+                <div class="method-btn" data-method="cluster" tabindex="0">Кластеризация<span class="info-icon" title="Группировка чисел по частоте выпадения">?</span></div>
                 <div class="method-btn" data-method="random" tabindex="0">Случайные</div>
             </div>
             <p>Поле 1 (8 из 20):</p>
@@ -460,6 +514,11 @@
             <div id="karnaughCalc" class="calc-details">
                 <div class="calc-title">Расчет метода Карнауха:</div>
                 <div id="karnaughDetails"></div>
+            </div>
+            
+            <div id="clusterCalc" class="calc-details">
+                <div class="calc-title">Детали кластеризации:</div>
+                <div id="clusterDetails"></div>
             </div>
             
             <button id="genBtn">Сгенерировать</button>
@@ -479,6 +538,17 @@
         <div class="card">
             <h2>Статистика чисел</h2>
             <table class="stats-table" id="statsTable"></table>
+        </div>
+        
+        <div class="card">
+            <h2>Расширенный частотный анализ <span class="cluster-badge">Новое</span></h2>
+            <div class="stats-advanced">
+                <p>Среднее значение: <span id="meanValue">н/д</span></p>
+                <p>Стандартное отклонение: <span id="stdDevValue">н/д</span></p>
+                <p>Горячие числа (выше среднего): <span id="hotNumbers">н/д</span></p>
+                <p>Холодные числа (ниже среднего): <span id="coldNumbers">н/д</span></p>
+            </div>
+            <div class="frequency-chart" id="frequencyChart"></div>
         </div>
         
         <div class="card" style="max-height: 300px; overflow-y: auto;">
@@ -614,6 +684,7 @@
     function saveHistory() {
         localStorage.setItem('rapido2History', JSON.stringify(history));
         updateWinsStats();
+        updateFrequencyAnalysis();
     }
 
     // --- Ввод ---
@@ -818,12 +889,17 @@
             </tr>`;
         }
         statsTable.innerHTML = html;
+        
+        // Обновляем расширенный частотный анализ
+        updateFrequencyAnalysis();
     }
     
     // --- Методы генерации ---
     let currentMethod = 'cold';
     const karnaughDetails = document.getElementById('karnaughDetails');
     const karnaughCalc = document.getElementById('karnaughCalc');
+    const clusterDetails = document.getElementById('clusterDetails');
+    const clusterCalc = document.getElementById('clusterCalc');
     
     // Переключение методов
     document.querySelectorAll('.method-btn').forEach(btn => {
@@ -833,11 +909,8 @@
             currentMethod = btn.dataset.method;
             
             // Показываем/скрываем блок с расчетом для Карнауха
-            if (currentMethod === 'karnaugh') {
-                karnaughCalc.classList.add('active');
-            } else {
-                karnaughCalc.classList.remove('active');
-            }
+            karnaughCalc.classList.toggle('active', currentMethod === 'karnaugh');
+            clusterCalc.classList.toggle('active', currentMethod === 'cluster');
             
             generateNumbers();
         });
@@ -854,6 +927,9 @@
                 break;
             case 'karnaugh':
                 generateKarnaughNumbers();
+                break;
+            case 'cluster':
+                generateClusterNumbers();
                 break;
             case 'random':
                 generateRandomNumbers();
@@ -1018,6 +1094,249 @@
         displayNumbers(selected1, selected2, 'karnaugh');
     }
     
+    // НОВЫЙ МЕТОД: КЛАСТЕРИЗАЦИЯ
+    function generateClusterNumbers() {
+        const countField1 = Array(20).fill(0);
+        
+        // Считаем частоты выпадения чисел
+        history.forEach(entry => {
+            if(entry.startsWith('прогноз')) return;
+            const parts = entry.split('|');
+            if(parts.length !== 3) return;
+            const nums1 = parts[1].split(',').map(n => parseInt(n));
+            nums1.forEach(n => {
+                if(n >= 1 && n <= 20) countField1[n - 1]++;
+            });
+        });
+
+        // Если нет истории, используем случайную генерацию
+        const draws = history.filter(e => !e.startsWith('прогноз')).length;
+        if(draws === 0) {
+            generateRandomNumbers();
+            return;
+        }
+
+        // Создаем массив объектов {число, частота}
+        let numbers = Array.from({ length: 20 }, (_, i) => ({ 
+            num: i + 1, 
+            count: countField1[i],
+            cluster: -1
+        }));
+
+        // Сортируем по частоте (по возрастанию)
+        numbers.sort((a, b) => a.count - b.count);
+
+        // Определяем количество кластеров (3-5)
+        const clusterCount = Math.min(5, Math.max(3, Math.floor(numbers.length / 4)));
+        
+        // K-means кластеризация (упрощенная версия)
+        const centroids = [];
+        const clusterSize = Math.floor(numbers.length / clusterCount);
+        
+        // Инициализируем центроиды
+        for(let i = 0; i < clusterCount; i++) {
+            const idx = Math.floor(i * clusterSize + clusterSize / 2);
+            centroids.push(numbers[idx].count);
+        }
+        
+        let changed = true;
+        let iterations = 0;
+        
+        // Алгоритм кластеризации
+        while(changed && iterations < 20) {
+            changed = false;
+            iterations++;
+            
+            // Принадлежность к кластерам
+            numbers.forEach(item => {
+                let minDist = Infinity;
+                let bestCluster = -1;
+                
+                centroids.forEach((centroid, clusterIdx) => {
+                    const dist = Math.abs(item.count - centroid);
+                    if(dist < minDist) {
+                        minDist = dist;
+                        bestCluster = clusterIdx;
+                    }
+                });
+                
+                if(item.cluster !== bestCluster) {
+                    changed = true;
+                    item.cluster = bestCluster;
+                }
+            });
+            
+            // Пересчет центроидов
+            centroids.forEach((_, clusterIdx) => {
+                const clusterItems = numbers.filter(item => item.cluster === clusterIdx);
+                if(clusterItems.length > 0) {
+                    const sum = clusterItems.reduce((acc, item) => acc + item.count, 0);
+                    centroids[clusterIdx] = sum / clusterItems.length;
+                }
+            });
+        }
+        
+        // Формируем кластеры
+        const clusters = {};
+        numbers.forEach(item => {
+            if(!clusters[item.cluster]) clusters[item.cluster] = [];
+            clusters[item.cluster].push(item);
+        });
+        
+        // Для каждого кластера выбираем 1-2 числа с наименьшей частотой
+        const selected1 = [];
+        Object.values(clusters).forEach(cluster => {
+            // Сортируем внутри кластера по частоте
+            cluster.sort((a, b) => a.count - b.count);
+            
+            // Выбираем от 1 до 2 чисел из кластера
+            const toSelect = Math.min(2, Math.max(1, Math.ceil(cluster.length / 4)));
+            for(let i = 0; i < toSelect; i++) {
+                if(cluster[i]) {
+                    selected1.push(cluster[i].num);
+                }
+            }
+        });
+        
+        // Если выбрано слишком много чисел - случайно убираем лишние
+        while(selected1.length > 8) {
+            selected1.splice(Math.floor(Math.random() * selected1.length), 1);
+        }
+        
+        // Если выбрано слишком мало - добавляем случайные
+        while(selected1.length < 8) {
+            const randomNum = Math.floor(Math.random() * 20) + 1;
+            if(!selected1.includes(randomNum)) {
+                selected1.push(randomNum);
+            }
+        }
+        
+        // Сортируем результат
+        selected1.sort((a, b) => a - b);
+        
+        // Для второго поля используем самое редкое число
+        const countField2 = Array(4).fill(0);
+        history.forEach(entry => {
+            if(entry.startsWith('прогноз')) return;
+            const parts = entry.split('|');
+            if(parts.length !== 3) return;
+            const num2 = parseInt(parts[2]);
+            if(num2 >= 1 && num2 <= 4) countField2[num2 - 1]++;
+        });
+        
+        let numbers2 = Array.from({ length: 4 }, (_, i) => i + 1);
+        numbers2.sort((a, b) => countField2[a - 1] - countField2[b - 1]);
+        const selected2 = numbers2[0];
+        
+        // Формируем детали расчета
+        let calcHTML = `<div><strong>Всего тиражей:</strong> ${draws}</div>`;
+        calcHTML += `<div><strong>Количество кластеров:</strong> ${clusterCount}</div>`;
+        calcHTML += `<div><strong>Центроиды:</strong> ${centroids.map(c => c.toFixed(2)).join(', ')}</div>`;
+        
+        Object.entries(clusters).forEach(([clusterId, items]) => {
+            calcHTML += `<div class="cluster-title">Кластер ${parseInt(clusterId)+1} (среднее: ${centroids[clusterId].toFixed(2)})</div>`;
+            calcHTML += `<div class="cluster-row">`;
+            items.forEach(item => {
+                const selected = selected1.includes(item.num);
+                calcHTML += `<div class="number ${selected ? 'selected' : ''}" title="Число ${item.num}: ${item.count} раз">${item.num}</div>`;
+            });
+            calcHTML += `</div>`;
+        });
+        
+        calcHTML += `<div><strong>Выбранные числа:</strong> ${selected1.join(', ')}</div>`;
+        clusterDetails.innerHTML = calcHTML;
+        
+        displayNumbers(selected1, selected2, 'cluster');
+    }
+    
+    // РАСШИРЕННЫЙ ЧАСТОТНЫЙ АНАЛИЗ
+    function updateFrequencyAnalysis() {
+        const countField1 = Array(20).fill(0);
+        const drawCount = history.filter(e => !e.startsWith('прогноз')).length;
+        
+        if(drawCount === 0) {
+            document.getElementById('meanValue').textContent = 'н/д';
+            document.getElementById('stdDevValue').textContent = 'н/д';
+            document.getElementById('hotNumbers').textContent = 'н/д';
+            document.getElementById('coldNumbers').textContent = 'н/д';
+            document.getElementById('frequencyChart').innerHTML = '';
+            return;
+        }
+        
+        // Считаем частоты
+        history.forEach(entry => {
+            if(entry.startsWith('прогноз')) return;
+            const parts = entry.split('|');
+            if(parts.length !== 3) return;
+            const nums1 = parts[1].split(',').map(n => parseInt(n));
+            nums1.forEach(n => {
+                if(n >= 1 && n <= 20) countField1[n - 1]++;
+            });
+        });
+        
+        // Рассчитываем среднее значение
+        const mean = countField1.reduce((a, b) => a + b, 0) / countField1.length;
+        document.getElementById('meanValue').textContent = mean.toFixed(2);
+        
+        // Рассчитываем стандартное отклонение
+        const variance = countField1.reduce((acc, count) => {
+            return acc + Math.pow(count - mean, 2);
+        }, 0) / countField1.length;
+        
+        const stdDev = Math.sqrt(variance);
+        document.getElementById('stdDevValue').textContent = stdDev.toFixed(2);
+        
+        // Определяем горячие и холодные числа
+        const hotNumbers = [];
+        const coldNumbers = [];
+        
+        countField1.forEach((count, index) => {
+            if(count > mean + stdDev * 0.5) {
+                hotNumbers.push(index + 1);
+            } else if(count < mean - stdDev * 0.5) {
+                coldNumbers.push(index + 1);
+            }
+        });
+        
+        document.getElementById('hotNumbers').textContent = hotNumbers.join(', ') || 'нет';
+        document.getElementById('coldNumbers').textContent = coldNumbers.join(', ') || 'нет';
+        
+        // Строим график
+        const chart = document.getElementById('frequencyChart');
+        chart.innerHTML = '';
+        
+        const maxCount = Math.max(...countField1);
+        const minCount = Math.min(...countField1);
+        const range = maxCount - minCount || 1;
+        
+        countField1.forEach((count, index) => {
+            const bar = document.createElement('div');
+            bar.className = 'frequency-bar';
+            
+            // Определяем тип числа (горячее/холодное)
+            if(count > mean + stdDev * 0.5) {
+                bar.classList.add('hot');
+            } else if(count < mean - stdDev * 0.5) {
+                bar.classList.add('cold');
+            }
+            
+            // Высота столбца (нормализация)
+            const heightPercent = 10 + 90 * (count - minCount) / range;
+            bar.style.height = `${heightPercent}%`;
+            
+            // Подпись числа
+            const label = document.createElement('div');
+            label.className = 'frequency-label';
+            label.textContent = index + 1;
+            
+            // Тултип с частотой
+            bar.title = `Число ${index+1}: ${count} раз (${count > mean ? 'горячее' : 'холодное'})`;
+            
+            bar.appendChild(label);
+            chart.appendChild(bar);
+        });
+    }
+    
     // Случайная генерация
     function generateRandomNumbers() {
         const nums1 = [];
@@ -1046,6 +1365,10 @@
             if(method === 'karnaugh') {
                 div.classList.add('karnaugh');
             }
+            // Для кластеризации
+            else if(method === 'cluster') {
+                div.classList.add('special');
+            }
             // Для других методов используем стандартное оформление
             else if(method === 'ogneva') {
                 div.classList.add('special');
@@ -1060,7 +1383,7 @@
         
         if(method === 'karnaugh') {
             div2.classList.add('karnaugh');
-        } else if(method === 'ogneva') {
+        } else if(method === 'ogneva' || method === 'cluster') {
             div2.classList.add('special');
         }
         
